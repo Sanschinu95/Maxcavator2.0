@@ -1,0 +1,49 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# ── Secrets — NEVER commit real keys ────────────────────
+backend/.env
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+
+# ── Database & vector store (Railway volume handles this) ─
+backend/data/
+
+# ── Node ─────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ── OS ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
