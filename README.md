@@ -34,20 +34,6 @@ npm run dev
 
 Frontend runs at `http://localhost:5173`, backend at `http://localhost:8000`.
 
-## Deployment
-
-### Backend → Railway
-1. Create a new Railway project, connect this GitHub repo
-2. Set **Root Directory** to `backend`
-3. Add a **Volume** mounted at `/app/data` for persistent SQLite + ChromaDB storage
-4. Set environment variables: `GROQ_API_KEY`, `GEMINI_API_KEY`
-5. Railway auto-detects Python via `requirements.txt` and starts via `Procfile`
-
-### Frontend → Vercel
-1. Create a new Vercel project, connect this GitHub repo
-2. Set **Root Directory** to `frontend`
-3. Set environment variable: `VITE_API_URL` = your Railway backend URL
-4. Vercel auto-detects Vite and deploys
 
 ## Environment Variables
 
