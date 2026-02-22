@@ -1,6 +1,6 @@
 # Maxcavator 2.0 🚀
 
-**PDF Intelligence Platform** — Upload PDFs, explore structured data, and chat with your documents using AI.
+**PDF Intelligence Platform** : Upload PDFs, explore structured data, and chat with your documents using AI.
 
 ## Stack
 
