@@ -4,32 +4,41 @@ routers/documents.py — GET /documents, DELETE /documents/{doc_id}
 
 from fastapi import APIRouter, HTTPException
 
-from database import get_all_documents, delete_document
+import os
+from database import async_get_all_documents, async_delete_document, async_get_document
 from vector_store import delete_document_chunks
+from config import PDFS_DIR
 
 router = APIRouter(tags=["documents"])
 
 
 @router.get("/documents")
 async def list_documents():
-    docs = await get_all_documents()
+    docs = await async_get_all_documents()
     return {"documents": docs}
 
 
 @router.delete("/documents/{doc_id}")
 async def remove_document(doc_id: str):
-    docs = await get_all_documents()
-    exists = any(d["id"] == doc_id for d in docs)
-    if not exists:
+    doc = await async_get_document(doc_id)
+    if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    # Remove chunks from ChromaDB (best-effort — don't fail if already gone)
+    # Remove per-doc ChromaDB collection
     try:
         delete_document_chunks(doc_id)
     except Exception:
         pass
 
-    # Remove from SQLite (cascades to pages, doc_tables, jobs)
-    await delete_document(doc_id)
+    # Remove PDF file
+    pdf_path = PDFS_DIR / f"{doc_id}.pdf"
+    if pdf_path.exists():
+        try:
+            os.remove(pdf_path)
+        except Exception:
+            pass
+
+    # Remove from MongoDB (document + jobs records)
+    await async_delete_document(doc_id)
 
     return {"deleted": doc_id}

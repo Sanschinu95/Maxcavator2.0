@@ -6,12 +6,13 @@ import StatusBadge from '../components/StatusBadge'
 export default function LibraryPage() {
     const [docs, setDocs] = useState([])
     const [loading, setLoading] = useState(true)
-    const [error, setError] = useState('')
-    const [deletingId, setDeletingId] = useState(null)
+    const [error, setError] = useState(null)
+    const [deleting, setDeleting] = useState(null)
     const navigate = useNavigate()
 
-    const loadDocs = useCallback(async () => {
+    const load = useCallback(async () => {
         try {
+            setLoading(true)
             const data = await getDocuments()
             setDocs(data.documents || [])
         } catch (err) {
@@ -21,116 +22,135 @@ export default function LibraryPage() {
         }
     }, [])
 
-    useEffect(() => {
-        loadDocs()
-    }, [loadDocs])
+    useEffect(() => { load() }, [load])
 
     const handleDelete = async (docId, e) => {
         e.stopPropagation()
-        if (!window.confirm('Delete this document from both SQLite and ChromaDB?')) return
-        setDeletingId(docId)
+        if (!confirm('Delete this document and all its data?')) return
+        setDeleting(docId)
         try {
             await deleteDocument(docId)
-            setDocs(prev => prev.filter(d => d.id !== docId))
+            setDocs(prev => prev.filter(d => d.document_id !== docId))
         } catch (err) {
-            alert(`Delete failed: ${err.message}`)
+            alert(err.message)
         } finally {
-            setDeletingId(null)
+            setDeleting(null)
         }
     }
 
-    if (loading) return (
-        <div className="page-container">
-            <div className="flex items-center gap-3 text-muted" style={{ marginTop: 80 }}>
-                <div className="spinner" /> Loading library…
+    if (loading) {
+        return (
+            <div className="page-container">
+                <div className="page-header">
+                    <h2>Library</h2>
+                </div>
+                <div className="doc-grid">
+                    {[1, 2, 3].map(i => (
+                        <div key={i} className="doc-card">
+                            <div className="skeleton" style={{ height: 20, width: '70%', marginBottom: 10 }} />
+                            <div className="skeleton" style={{ height: 14, width: '50%', marginBottom: 16 }} />
+                            <div className="skeleton" style={{ height: 12, width: '90%' }} />
+                        </div>
+                    ))}
+                </div>
             </div>
-        </div>
-    )
+        )
+    }
+
+    if (error) {
+        return (
+            <div className="page-container">
+                <div className="page-header"><h2>Library</h2></div>
+                <div className="error-msg">Failed to load documents: {error}</div>
+            </div>
+        )
+    }
 
     return (
         <div className="page-container">
             <div className="page-header">
-                <h2>Document Library</h2>
-                <p>{docs.length} document{docs.length !== 1 ? 's' : ''} ingested</p>
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2>Library</h2>
+                        <p>{docs.length} document{docs.length !== 1 ? 's' : ''} ingested</p>
+                    </div>
+                    <button className="btn btn-secondary" onClick={load} id="refresh-library-btn">
+                        ↻ Refresh
+                    </button>
+                </div>
             </div>
-
-            {error && <div className="text-sm text-error mb-4">⚠ {error}</div>}
 
             {docs.length === 0 ? (
                 <div className="empty-state">
-                    <div className="empty-state-icon">◫</div>
+                    <div className="empty-state-icon">📭</div>
                     <div className="empty-state-title">No documents yet</div>
-                    <div className="empty-state-sub">
-                        Go to <strong>Ingest</strong> to upload your first PDF.
+                    <div className="empty-state-desc">
+                        Head to the Ingest page to upload your first PDF.
                     </div>
-                    <button className="btn btn-primary mt-4" onClick={() => navigate('/')} id="go-ingest-btn">
-                        ⬆ Ingest a PDF
-                    </button>
                 </div>
             ) : (
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                    <table className="lib-table" id="library-table">
-                        <thead>
-                            <tr>
-                                <th>Filename</th>
-                                <th>Pages</th>
-                                <th>Words</th>
-                                <th>Extract</th>
-                                <th>RAG</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {docs.map(doc => (
-                                <tr
-                                    key={doc.id}
-                                    style={{ cursor: 'pointer' }}
-                                    onClick={() => navigate(`/data/${doc.id}`)}
-                                    id={`lib-row-${doc.id}`}
-                                >
-                                    <td>
-                                        <div className="lib-filename">{doc.filename}</div>
-                                        {doc.source_url && (
-                                            <div className="text-xs text-muted font-mono" style={{ marginTop: 2 }}>
-                                                {doc.source_url.length > 50
-                                                    ? doc.source_url.slice(0, 50) + '…'
-                                                    : doc.source_url}
-                                            </div>
-                                        )}
-                                    </td>
-                                    <td><span className="lib-stat">{doc.page_count ?? '—'}</span></td>
-                                    <td><span className="lib-stat">{doc.word_count != null ? doc.word_count.toLocaleString() : '—'}</span></td>
-                                    <td><StatusBadge status={doc.extract_status} /></td>
-                                    <td><StatusBadge status={doc.rag_status} /></td>
-                                    <td onClick={e => e.stopPropagation()}>
-                                        <div className="flex gap-2 items-center">
-                                            {doc.rag_status === 'done' && (
-                                                <button
-                                                    className="btn btn-ghost text-teal"
-                                                    style={{ fontSize: '0.75rem', padding: '5px 10px' }}
-                                                    onClick={() => navigate(`/chat/${doc.id}`)}
-                                                    id={`chat-doc-btn-${doc.id}`}
-                                                >
-                                                    ◈ Chat
-                                                </button>
-                                            )}
-                                            <button
-                                                className="btn btn-danger"
-                                                style={{ fontSize: '0.75rem', padding: '5px 10px' }}
-                                                onClick={e => handleDelete(doc.id, e)}
-                                                disabled={deletingId === doc.id}
-                                                id={`delete-doc-btn-${doc.id}`}
-                                            >
-                                                {deletingId === doc.id
-                                                    ? <span className="spinner" style={{ width: 12, height: 12 }} />
-                                                    : '✕ Delete'}
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                <div className="doc-grid">
+                    {docs.map(doc => {
+                        const meta = doc.metadata || {}
+                        const job = doc.job || {}
+                        const title = meta.title || doc.filename || 'Untitled'
+                        const extract = job.extract_status || 'pending'
+                        const rag = job.rag_status || 'pending'
+
+                        return (
+                            <div
+                                key={doc.document_id}
+                                className="doc-card"
+                                id={`doc-card-${doc.document_id}`}
+                            >
+                                <div className="doc-card-title" title={title}>{title}</div>
+
+                                <div className="doc-card-meta">
+                                    {meta.page_count > 0 && <span>{meta.page_count} pages</span>}
+                                    {meta.word_count > 0 && <span>{meta.word_count.toLocaleString()} words</span>}
+                                    {meta.section_count > 0 && <span>{meta.section_count} sections</span>}
+                                </div>
+
+                                <div className="doc-card-badges">
+                                    <StatusBadge status={extract} label={`Extract: ${extract}`} />
+                                    <StatusBadge status={rag} label={`RAG: ${rag}`} />
+                                </div>
+
+                                {meta.author && (
+                                    <div className="text-xs text-muted font-mono mb-3">
+                                        by {meta.author}
+                                    </div>
+                                )}
+
+                                <div className="doc-card-actions">
+                                    <button
+                                        className="btn btn-danger"
+                                        onClick={(e) => handleDelete(doc.document_id, e)}
+                                        disabled={deleting === doc.document_id}
+                                        id={`delete-doc-${doc.document_id}`}
+                                        title="Delete document"
+                                    >
+                                        {deleting === doc.document_id ? '…' : '🗑'}
+                                    </button>
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={() => navigate(`/explore/${doc.document_id}`)}
+                                        id={`explore-doc-${doc.document_id}`}
+                                    >
+                                        Explore
+                                    </button>
+                                    <button
+                                        className="btn btn-amber"
+                                        onClick={() => navigate(`/chat/${doc.document_id}`)}
+                                        disabled={rag !== 'done'}
+                                        id={`chat-doc-${doc.document_id}`}
+                                    >
+                                        ◈ Chat
+                                    </button>
+                                </div>
+                            </div>
+                        )
+                    })}
                 </div>
             )}
         </div>

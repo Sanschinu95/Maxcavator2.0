@@ -1,68 +1,66 @@
 """
-routers/dataview.py — GET /data/{doc_id}/pages, /tables, /metadata
+routers/dataview.py — Explore endpoints
+
+GET /explore/{doc_id}/sections
+GET /explore/{doc_id}/tables
+GET /explore/{doc_id}/images
+GET /explore/{doc_id}/links
+GET /explore/{doc_id}/json
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
+from database import async_get_document
 
-from database import get_page, get_page_count, get_tables, get_metadata, get_document
-
-router = APIRouter(prefix="/data", tags=["dataview"])
+router = APIRouter(prefix="/explore", tags=["explore"])
 
 
-@router.get("/{doc_id}/pages")
-async def get_pages(doc_id: str, page: int = Query(default=1, ge=1)):
-    doc = await get_document(doc_id)
+async def _get_doc_or_404(doc_id: str) -> dict:
+    doc = await async_get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
+    return doc
 
-    total_pages = await get_page_count(doc_id)
-    if total_pages == 0:
-        raise HTTPException(status_code=404, detail="No pages extracted yet — extract pipeline may still be running.")
 
-    if page > total_pages:
-        raise HTTPException(status_code=404, detail=f"Page {page} out of range (total: {total_pages}).")
-
-    page_data = await get_page(doc_id, page)
-    if not page_data:
-        raise HTTPException(status_code=404, detail=f"Page {page} not found.")
-
+@router.get("/{doc_id}/sections")
+async def get_sections(doc_id: str):
+    doc = await _get_doc_or_404(doc_id)
     return {
-        "doc_id": doc_id,
-        "page": page,
-        "total_pages": total_pages,
-        "text": page_data["text"],
+        "doc_id":   doc_id,
+        "title":    doc.get("metadata", {}).get("title", doc.get("filename", "")),
+        "sections": doc.get("sections", []),
     }
 
 
 @router.get("/{doc_id}/tables")
-async def get_doc_tables(doc_id: str):
-    doc = await get_document(doc_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found.")
-
-    tables = await get_tables(doc_id)
-    return {"doc_id": doc_id, "tables": tables}
-
-
-@router.get("/{doc_id}/metadata")
-async def get_doc_metadata(doc_id: str):
-    doc = await get_document(doc_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found.")
-
-    import json
-    raw_meta = doc.get("metadata", "{}")
-    try:
-        meta = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
-    except Exception:
-        meta = {}
-
+async def get_tables(doc_id: str):
+    doc = await _get_doc_or_404(doc_id)
     return {
         "doc_id": doc_id,
-        "filename": doc["filename"],
-        "source_url": doc.get("source_url"),
-        "page_count": doc.get("page_count", 0),
-        "word_count": doc.get("word_count", 0),
-        "created_at": doc.get("created_at"),
-        **meta,
+        "tables": doc.get("tables", []),
     }
+
+
+@router.get("/{doc_id}/images")
+async def get_images(doc_id: str):
+    doc = await _get_doc_or_404(doc_id)
+    return {
+        "doc_id": doc_id,
+        "images": doc.get("images", []),
+    }
+
+
+@router.get("/{doc_id}/links")
+async def get_links(doc_id: str):
+    doc = await _get_doc_or_404(doc_id)
+    return {
+        "doc_id": doc_id,
+        "links":  doc.get("links", []),
+    }
+
+
+@router.get("/{doc_id}/json")
+async def get_full_json(doc_id: str):
+    doc = await _get_doc_or_404(doc_id)
+    # Exclude raw_pages from full json to keep response size manageable
+    # but include everything else
+    return doc

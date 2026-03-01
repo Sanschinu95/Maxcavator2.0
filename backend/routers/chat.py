@@ -1,166 +1,150 @@
 """
-routers/chat.py — POST /chat  (SSE stream)
+routers/chat.py — POST /chat
 
-Uses Groq SDK (OpenAI-compatible) with llama-3.3-70b-versatile.
+RAG chat endpoint using Groq (llama-3.3-70b-versatile) with SSE streaming.
 
-SSE event sequence:
-  data: {"type":"token","content":"..."}   — repeated for each token
-  data: {"type":"sources","content":[...]} — one event with all source chunks
-  data: {"type":"done"}                    — final terminator
-  data: {"type":"error","content":"..."}   — on failure
+Request body:
+  { "query": str, "doc_id": str | null, "history": [{role, content}] }
+
+SSE event types:
+  { "type": "sources", "content": [...] }
+  { "type": "token",   "content": "..." }
+  { "type": "done"  }
+  { "type": "error",   "content": "..." }
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import AsyncGenerator
+from functools import partial
 
-from groq import Groq
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import GROQ_API_KEY, GROQ_MODEL, TOP_K_CHUNKS
-from database import get_all_documents
+from database import get_document
 from vector_store import query_chunks
 
 router = APIRouter(tags=["chat"])
 
-# Single Groq client instance
-_client = Groq(api_key=GROQ_API_KEY)
-
-SYSTEM_PROMPT = """You are Maxcavator, an expert document analysis assistant.
-
-Rules:
-1. Answer ONLY using information from the provided context chunks.
-2. When citing information, mention the page number (e.g., "According to page 3...").
-3. If the answer is not found in the provided context, say: "I could not find that information in the provided document."
-4. Be concise, precise, and analytical. Use markdown formatting where helpful.
-5. Never fabricate information not present in the context.
-"""
-
-
-class ChatMessage(BaseModel):
-    role: str   # "user" or "assistant"
+# --------------------------------------------------------------------------- #
+# Request schema
+# --------------------------------------------------------------------------- #
+class Message(BaseModel):
+    role: str
     content: str
 
 
 class ChatRequest(BaseModel):
     query: str
     doc_id: str | None = None
-    history: list[ChatMessage] = []
+    history: list[Message] = []
 
 
-def _build_context_block(chunks: list[dict]) -> str:
-    if not chunks:
-        return "No relevant context found in the document."
-    parts = []
-    for i, chunk in enumerate(chunks, start=1):
-        parts.append(f"[Context {i} — Page {chunk['page_num']}]\n{chunk['text']}")
-    return "\n\n".join(parts)
+# --------------------------------------------------------------------------- #
+# SSE helpers
+# --------------------------------------------------------------------------- #
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
 
 
-def _build_messages(request: ChatRequest, chunks: list[dict]) -> list[dict]:
-    """
-    Build OpenAI-style messages list for Groq:
-    system → [history turns] → user (current query with context)
-    """
-    context_block = _build_context_block(chunks)
-
-    # System message with RAG rules
-    messages: list[dict] = [
-        {"role": "system", "content": SYSTEM_PROMPT}
-    ]
-
-    # Last 6 turns of history (12 messages max)
-    recent_history = list(request.history)[-12:]
-    for msg in recent_history:
-        role = "user" if msg.role == "user" else "assistant"
-        messages.append({"role": role, "content": msg.content})
-
-    # Current user query, with context appended
-    user_content = (
-        f"{request.query}\n\n"
-        f"--- RETRIEVED DOCUMENT CONTEXT ---\n{context_block}"
-    )
-    messages.append({"role": "user", "content": user_content})
-
-    return messages
-
-
-async def _stream_sse(request: ChatRequest) -> AsyncGenerator[str, None]:
-    def _event(data: dict) -> str:
-        return f"data: {json.dumps(data)}\n\n"
-
-    try:
-        # ------------------------------------------------------------------- #
-        # Validate doc + rag_status if doc_id provided
-        # ------------------------------------------------------------------- #
-        if request.doc_id:
-            docs = await get_all_documents()
-            doc_row = next((d for d in docs if d["id"] == request.doc_id), None)
-            if not doc_row:
-                yield _event({"type": "error", "content": "Document not found."})
-                yield _event({"type": "done"})
-                return
-            if doc_row.get("rag_status") != "done":
-                status = doc_row.get("rag_status", "unknown")
-                yield _event({
-                    "type": "error",
-                    "content": (
-                        f"The RAG pipeline for this document is still '{status}'. "
-                        "Please wait until it finishes before chatting."
-                    ),
-                })
-                yield _event({"type": "done"})
-                return
-
-        # ------------------------------------------------------------------- #
-        # Retrieve relevant chunks from ChromaDB
-        # ------------------------------------------------------------------- #
-        chunks = query_chunks(
-            query=request.query,
-            doc_id=request.doc_id,
-            n_results=TOP_K_CHUNKS,
-        )
-
-        # ------------------------------------------------------------------- #
-        # Call Groq with streaming
-        # ------------------------------------------------------------------- #
-        messages = _build_messages(request, chunks)
-
-        stream = _client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=2048,
-            stream=True,
-        )
-
-        for chunk in stream:
-            delta = chunk.choices[0].delta
-            text = delta.content or ""
-            if text:
-                yield _event({"type": "token", "content": text})
-
-        # ------------------------------------------------------------------- #
-        # Emit sources then done
-        # ------------------------------------------------------------------- #
-        yield _event({"type": "sources", "content": chunks})
-        yield _event({"type": "done"})
-
-    except Exception as exc:
-        yield _event({"type": "error", "content": str(exc)})
-        yield _event({"type": "done"})
-
-
+# --------------------------------------------------------------------------- #
+# POST /chat
+# --------------------------------------------------------------------------- #
 @router.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(req: ChatRequest):
     return StreamingResponse(
-        _stream_sse(request),
+        _stream(req),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _stream(req: ChatRequest):
+    try:
+        # ── 1. Retrieve context chunks ─────────────────────────────────────
+        loop = asyncio.get_event_loop()
+        chunks = await loop.run_in_executor(
+            None, partial(query_chunks, req.query, req.doc_id, TOP_K_CHUNKS)
+        )
+
+        # ── 2. Emit sources event first ────────────────────────────────────
+        sources = [
+            {
+                "text":        c["text"][:400],
+                "doc_id":      c["doc_id"],
+                "page_num":    c["page_num"],
+                "section_idx": c.get("section_idx"),
+                "distance":    c.get("distance", 0.0),
+            }
+            for c in chunks
+        ]
+        yield _sse({"type": "sources", "content": sources})
+
+        # ── 3. Build context block ─────────────────────────────────────────
+        ctx_parts = []
+        for i, c in enumerate(chunks, 1):
+            heading = ""
+            if c.get("section_idx") is not None and req.doc_id:
+                doc = await loop.run_in_executor(
+                    None, partial(get_document, c["doc_id"])
+                )
+                if doc:
+                    secs = doc.get("sections", [])
+                    idx  = c.get("section_idx", 0)
+                    if 0 <= idx < len(secs):
+                        heading = secs[idx].get("heading", "")
+            ctx_parts.append(
+                f"[{i}] {f'({heading}) ' if heading else ''}Page {c['page_num']}:\n{c['text']}"
+            )
+
+        context_block = "\n\n---\n\n".join(ctx_parts)
+
+        system_prompt = (
+            "You are Maxcavator, an expert AI assistant specialising in analysing "
+            "and answering questions about PDF documents. "
+            "You have access to relevant excerpts from the document(s) below. "
+            "Answer clearly and concisely, citing the excerpt numbers [1], [2] etc. "
+            "when you reference them. If the context doesn't contain enough information, "
+            "say so honestly rather than guessing.\n\n"
+            f"--- DOCUMENT CONTEXT ---\n{context_block}\n--- END CONTEXT ---"
+        )
+
+        # ── 4. Build message list for Groq ────────────────────────────────
+        messages = [{"role": "system", "content": system_prompt}]
+        for m in req.history[-10:]:    # keep last 10 turns to stay within token limit
+            messages.append({"role": m.role, "content": m.content})
+        messages.append({"role": "user", "content": req.query})
+
+        # ── 5. Stream from Groq ───────────────────────────────────────────
+        from groq import Groq  # imported here to keep startup fast
+
+        client = Groq(api_key=GROQ_API_KEY)
+
+        def _groq_stream():
+            return client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=messages,
+                stream=True,
+                temperature=0.35,
+                max_tokens=2048,
+            )
+
+        stream = await loop.run_in_executor(None, _groq_stream)
+
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield _sse({"type": "token", "content": delta.content})
+                await asyncio.sleep(0)    # allow other coroutines to run
+
+        yield _sse({"type": "done"})
+
+    except Exception as exc:
+        yield _sse({"type": "error", "content": str(exc)})
+        yield _sse({"type": "done"})

@@ -1,74 +1,70 @@
-import StatusBadge from './StatusBadge'
-
 /**
- * ProgressTracker — renders two independent pipeline progress bars.
- * Props: job = { extract_status, rag_status, extract_error, rag_error }
+ * ProgressTracker — three progress bars: Extraction, RAG Indexing, Overall
  */
 export default function ProgressTracker({ job }) {
     if (!job) return null
 
+    const extractPct = job.extract_progress ?? (
+        job.extract_status === 'done' ? 100 :
+            job.extract_status === 'running' ? 50 :
+                job.extract_status === 'error' ? 0 : 0
+    )
+
+    const ragPct = job.rag_progress ?? (
+        job.rag_status === 'done' ? 100 :
+            job.rag_status === 'running' ? 50 :
+                job.rag_status === 'error' ? 0 : 0
+    )
+
+    const overallPct = Math.round((extractPct + ragPct) / 2)
+
+    const statusClass = (status) => {
+        if (status === 'done') return 'done'
+        if (status === 'running') return 'running'
+        if (status === 'error') return 'error'
+        return 'pending'
+    }
+
     return (
-        <div className="pipeline-tracker">
-            <PipelineRow
-                id="pipeline-extract"
-                icon="◧"
-                label="Pipeline A — Extraction"
-                sublabel="Pages · Tables · Metadata → SQLite"
-                status={job.extract_status}
-                error={job.extract_error}
-            />
-            <PipelineRow
-                id="pipeline-rag"
-                icon="◨"
-                label="Pipeline B — RAG Indexing"
-                sublabel="Chunks · Embeddings → ChromaDB"
-                status={job.rag_status}
-                error={job.rag_error}
-            />
+        <div className="progress-panel">
+            <div className="progress-panel-title">
+                <span>Pipeline Progress</span>
+                {overallPct === 100
+                    ? <span className="badge done"><span className="badge-dot" />Complete</span>
+                    : <span className="badge running"><span className="badge-dot" />Processing</span>
+                }
+            </div>
+
+            <div className="progress-group">
+                <Bar label="Extraction" pct={extractPct} status={statusClass(job.extract_status)} />
+                <Bar label="RAG Indexing" pct={ragPct} status={statusClass(job.rag_status)} />
+                <Bar label="Overall" pct={overallPct} status={overallPct === 100 ? 'done' : overallPct > 0 ? 'running' : 'pending'} />
+            </div>
+
+            {job.errors && job.errors.length > 0 && (
+                <div className="error-msg mt-3">
+                    {job.errors.map((e, i) => (
+                        <div key={i}>[{e.pipeline}] {e.error}</div>
+                    ))}
+                </div>
+            )}
         </div>
     )
 }
 
-function PipelineRow({ id, icon, label, sublabel, status, error }) {
-    const s = status || 'pending'
-
+function Bar({ label, pct, status }) {
     return (
-        <div className="pipeline-row" id={id}>
-            <div className="pipeline-row-header">
-                <div className="pipeline-label">
-                    <span className="pipeline-icon">{icon}</span>
-                    {label}
-                </div>
-                <StatusBadge status={s} />
+        <div className="progress-item">
+            <div className="progress-label">
+                <span className="progress-label-text">{label}</span>
+                <span className="progress-label-pct">{pct}%</span>
             </div>
-
-            <div className="progress-bar-track">
-                <div className={`progress-bar-fill ${s}`} />
+            <div className="progress-track">
+                <div
+                    className={`progress-fill ${status}`}
+                    style={{ width: `${pct}%` }}
+                />
             </div>
-
-            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                    {sublabel}
-                </span>
-                {s === 'done' && (
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-success)' }}>Completed</span>
-                )}
-            </div>
-
-            {error && s === 'error' && (
-                <div style={{
-                    marginTop: 10,
-                    padding: '8px 12px',
-                    background: 'rgba(248,113,113,0.08)',
-                    border: '1px solid rgba(248,113,113,0.25)',
-                    borderRadius: 'var(--radius-sm)',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.75rem',
-                    color: 'var(--text-error)',
-                }}>
-                    ✕ {error}
-                </div>
-            )}
         </div>
     )
 }

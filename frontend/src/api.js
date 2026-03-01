@@ -1,14 +1,10 @@
 /**
- * api.js — All API calls to the FastAPI backend.
- * In development: Vite proxies all routes to localhost:8000 (BASE = '')
- * In production:  VITE_API_URL points to the deployed Railway backend
+ * api.js — All API calls to the Maxcavator 2.0 FastAPI backend.
  */
 
 const BASE = import.meta.env.VITE_API_URL || ''
 
-// ------------------------------------------------------------------ //
-// Ingest
-// ------------------------------------------------------------------ //
+// ─────────────────────────────────── Ingest ──────────────────────────────── //
 export async function ingestFile(file) {
     const form = new FormData()
     form.append('file', file)
@@ -31,22 +27,18 @@ export async function ingestUrl(url) {
     return res.json()
 }
 
-// ------------------------------------------------------------------ //
-// Job status
-// ------------------------------------------------------------------ //
+// ────────────────────────────────── Status ───────────────────────────────── //
 export async function getStatus(jobId) {
     const res = await fetch(`${BASE}/status/${jobId}`)
     if (!res.ok) throw new Error('Failed to fetch status')
     return res.json()
 }
 
-// ------------------------------------------------------------------ //
-// Documents
-// ------------------------------------------------------------------ //
+// ─────────────────────────────────── Docs ────────────────────────────────── //
 export async function getDocuments() {
     const res = await fetch(`${BASE}/documents`)
     if (!res.ok) throw new Error('Failed to fetch documents')
-    return res.json()  // { documents: [...] }
+    return res.json()   // { documents: [...] }
 }
 
 export async function deleteDocument(docId) {
@@ -58,38 +50,40 @@ export async function deleteDocument(docId) {
     return res.json()
 }
 
-// ------------------------------------------------------------------ //
-// DataView
-// ------------------------------------------------------------------ //
-export async function getPages(docId, page = 1) {
-    const res = await fetch(`${BASE}/data/${docId}/pages?page=${page}`)
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }))
-        throw new Error(err.detail || 'Failed to fetch page')
-    }
+// ──────────────────────────────── Explore ────────────────────────────────── //
+export async function getSections(docId) {
+    const res = await fetch(`${BASE}/explore/${docId}/sections`)
+    if (!res.ok) throw new Error('Failed to fetch sections')
     return res.json()
 }
 
 export async function getTables(docId) {
-    const res = await fetch(`${BASE}/data/${docId}/tables`)
+    const res = await fetch(`${BASE}/explore/${docId}/tables`)
     if (!res.ok) throw new Error('Failed to fetch tables')
     return res.json()
 }
 
-export async function getMetadata(docId) {
-    const res = await fetch(`${BASE}/data/${docId}/metadata`)
-    if (!res.ok) throw new Error('Failed to fetch metadata')
+export async function getImages(docId) {
+    const res = await fetch(`${BASE}/explore/${docId}/images`)
+    if (!res.ok) throw new Error('Failed to fetch images')
     return res.json()
 }
 
-// ------------------------------------------------------------------ //
-// Chat (SSE stream)
-// ------------------------------------------------------------------ //
+export async function getLinks(docId) {
+    const res = await fetch(`${BASE}/explore/${docId}/links`)
+    if (!res.ok) throw new Error('Failed to fetch links')
+    return res.json()
+}
 
+export async function getFullJson(docId) {
+    const res = await fetch(`${BASE}/explore/${docId}/json`)
+    if (!res.ok) throw new Error('Failed to fetch document JSON')
+    return res.json()
+}
+
+// ──────────────────────────────── Chat SSE ───────────────────────────────── //
 /**
- * chatStream — opens an SSE-like POST stream manually.
- * Calls onToken(str), onSources(array), onDone(), onError(str) as events arrive.
- *
+ * chatStream — opens an SSE POST stream manually.
  * Returns an AbortController so the caller can cancel.
  */
 export function chatStream({ query, docId, history, onToken, onSources, onDone, onError }) {
@@ -125,7 +119,7 @@ export function chatStream({ query, docId, history, onToken, onSources, onDone, 
 
                 buffer += decoder.decode(value, { stream: true })
                 const lines = buffer.split('\n')
-                buffer = lines.pop() // save incomplete line
+                buffer = lines.pop()    // save incomplete line
 
                 for (const line of lines) {
                     if (!line.startsWith('data: ')) continue

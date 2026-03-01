@@ -1,233 +1,191 @@
 """
-database.py — async SQLite helpers via aiosqlite.
+database.py — MongoDB helpers via pymongo (synchronous, called from asyncio
+              via run_in_executor where needed, and directly in sync pipelines).
 
-Schema
-------
-documents   — one row per ingested PDF
-jobs        — one row per ingest job (links to a document)
-pages       — one row per page of extracted text
-doc_tables  — one row per extracted table (HTML string)
+Collections
+-----------
+documents  — full nested document schema (one doc per ingested PDF)
+jobs       — pipeline progress tracking
 """
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
-import aiosqlite
+import pymongo
+from pymongo import MongoClient
+from pymongo.collection import Collection
 
-from config import SQLITE_PATH
+from config import MONGODB_URI, MONGODB_DB
 
 # --------------------------------------------------------------------------- #
-# DDL
+# Singleton client
 # --------------------------------------------------------------------------- #
-_DDL = """
-PRAGMA journal_mode=WAL;
-
-CREATE TABLE IF NOT EXISTS documents (
-    id          TEXT    PRIMARY KEY,
-    filename    TEXT    NOT NULL,
-    source_url  TEXT,
-    page_count  INTEGER DEFAULT 0,
-    word_count  INTEGER DEFAULT 0,
-    metadata    TEXT    DEFAULT '{}',
-    created_at  REAL    NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS jobs (
-    id              TEXT    PRIMARY KEY,
-    doc_id          TEXT    NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    extract_status  TEXT    NOT NULL DEFAULT 'pending',
-    rag_status      TEXT    NOT NULL DEFAULT 'pending',
-    extract_error   TEXT,
-    rag_error       TEXT,
-    created_at      REAL    NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS pages (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    doc_id      TEXT    NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    page_num    INTEGER NOT NULL,
-    text        TEXT    NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS doc_tables (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    doc_id      TEXT    NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    page_num    INTEGER NOT NULL,
-    html        TEXT    NOT NULL
-);
-"""
+_client: MongoClient | None = None
+_db = None
 
 
-async def init_db() -> None:
-    """Create all tables on startup."""
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        await db.executescript(_DDL)
-        await db.commit()
+def get_db():
+    global _client, _db
+    if _client is None:
+        try:
+            _client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5_000)
+            _db = _client[MONGODB_DB]
+            # Ensure indexes (will raise if unreachable — caught in init_db)
+            _db.documents.create_index("document_id", unique=True)
+            _db.jobs.create_index("job_id", unique=True)
+            _db.jobs.create_index("doc_id")
+        except Exception:
+            _client = None
+            _db = None
+            raise
+    return _db
 
 
 # --------------------------------------------------------------------------- #
 # Document helpers
 # --------------------------------------------------------------------------- #
-async def insert_document(doc_id: str, filename: str, source_url: str | None = None) -> None:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO documents (id, filename, source_url, created_at) VALUES (?,?,?,?)",
-            (doc_id, filename, source_url, time.time()),
-        )
-        await db.commit()
+def insert_document_record(doc_id: str, filename: str, source_url: str | None = None) -> None:
+    db = get_db()
+    db.documents.insert_one({
+        "document_id": doc_id,
+        "filename": filename,
+        "metadata": {
+            "title": filename,
+            "author": "",
+            "year": "",
+            "source_url": source_url or "",
+            "page_count": 0,
+            "word_count": 0,
+            "ingested_at": time.time(),
+        },
+        "sections":  [],
+        "tables":    [],
+        "images":    [],
+        "links":     [],
+        "raw_pages": [],
+    })
 
 
-async def update_document_stats(doc_id: str, page_count: int, word_count: int, metadata: dict) -> None:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        await db.execute(
-            "UPDATE documents SET page_count=?, word_count=?, metadata=? WHERE id=?",
-            (page_count, word_count, json.dumps(metadata), doc_id),
-        )
-        await db.commit()
+def save_full_schema(doc_id: str, schema: dict) -> None:
+    """Replace a document's full extracted schema."""
+    db = get_db()
+    db.documents.update_one(
+        {"document_id": doc_id},
+        {"$set": schema},
+    )
 
 
-async def get_all_documents() -> list[dict]:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            """
-            SELECT d.*, j.id AS job_id, j.extract_status, j.rag_status,
-                   j.extract_error, j.rag_error
-            FROM documents d
-            LEFT JOIN jobs j ON j.doc_id = d.id
-            ORDER BY d.created_at DESC
-            """
-        ) as cur:
-            rows = await cur.fetchall()
-    return [dict(r) for r in rows]
+def get_all_documents() -> list[dict]:
+    db = get_db()
+    # Join with latest job for each document
+    pipeline = [
+        {"$lookup": {
+            "from": "jobs",
+            "localField": "document_id",
+            "foreignField": "doc_id",
+            "as": "job",
+        }},
+        {"$addFields": {"job": {"$arrayElemAt": ["$job", 0]}}},
+        {"$sort": {"metadata.ingested_at": -1}},
+    ]
+    docs = list(db.documents.aggregate(pipeline))
+    result = []
+    for d in docs:
+        d.pop("_id", None)
+        if "job" in d and d["job"]:
+            d["job"].pop("_id", None)
+        result.append(d)
+    return result
 
 
-async def get_document(doc_id: str) -> dict | None:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)) as cur:
-            row = await cur.fetchone()
-    return dict(row) if row else None
+def get_document(doc_id: str) -> dict | None:
+    db = get_db()
+    doc = db.documents.find_one({"document_id": doc_id}, {"_id": 0})
+    return doc
 
 
-async def delete_document(doc_id: str) -> None:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        await db.execute("PRAGMA foreign_keys = ON")
-        await db.execute("DELETE FROM documents WHERE id=?", (doc_id,))
-        await db.commit()
+def delete_document(doc_id: str) -> None:
+    db = get_db()
+    db.documents.delete_one({"document_id": doc_id})
+    db.jobs.delete_many({"doc_id": doc_id})
 
 
 # --------------------------------------------------------------------------- #
 # Job helpers
 # --------------------------------------------------------------------------- #
-async def insert_job(job_id: str, doc_id: str) -> None:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        await db.execute(
-            "INSERT INTO jobs (id, doc_id, created_at) VALUES (?,?,?)",
-            (job_id, doc_id, time.time()),
-        )
-        await db.commit()
+def insert_job(job_id: str, doc_id: str) -> None:
+    db = get_db()
+    db.jobs.insert_one({
+        "job_id": job_id,
+        "doc_id": doc_id,
+        "extract_status":   "pending",
+        "extract_progress": 0,
+        "rag_status":       "pending",
+        "rag_progress":     0,
+        "errors":           [],
+        "created_at":       time.time(),
+    })
 
 
-async def update_job_status(
-    job_id: str,
-    *,
-    extract_status: str | None = None,
-    rag_status: str | None = None,
-    extract_error: str | None = None,
-    rag_error: str | None = None,
-) -> None:
-    updates: list[tuple[str, Any]] = []
-    if extract_status is not None:
-        updates.append(("extract_status", extract_status))
-    if rag_status is not None:
-        updates.append(("rag_status", rag_status))
-    if extract_error is not None:
-        updates.append(("extract_error", extract_error))
-    if rag_error is not None:
-        updates.append(("rag_error", rag_error))
-    if not updates:
-        return
-    set_clause = ", ".join(f"{col}=?" for col, _ in updates)
-    values = [v for _, v in updates] + [job_id]
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        await db.execute(f"UPDATE jobs SET {set_clause} WHERE id=?", values)
-        await db.commit()
+def update_job(job_id: str, **fields) -> None:
+    db = get_db()
+    db.jobs.update_one({"job_id": job_id}, {"$set": fields})
 
 
-async def get_job(job_id: str) -> dict | None:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)) as cur:
-            row = await cur.fetchone()
-    return dict(row) if row else None
+def get_job(job_id: str) -> dict | None:
+    db = get_db()
+    job = db.jobs.find_one({"job_id": job_id}, {"_id": 0})
+    return job
 
 
 # --------------------------------------------------------------------------- #
-# Page helpers
+# Async wrappers (thin — pymongo is fast enough for our load; avoid motor dep)
 # --------------------------------------------------------------------------- #
-async def insert_pages(doc_id: str, pages: list[dict]) -> None:
-    """pages: list of {page_num, text}"""
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        await db.executemany(
-            "INSERT INTO pages (doc_id, page_num, text) VALUES (?,?,?)",
-            [(doc_id, p["page_num"], p["text"]) for p in pages],
-        )
-        await db.commit()
+import asyncio
+from functools import partial
 
 
-async def get_page(doc_id: str, page_num: int) -> dict | None:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM pages WHERE doc_id=? AND page_num=?", (doc_id, page_num)
-        ) as cur:
-            row = await cur.fetchone()
-    return dict(row) if row else None
+async def async_insert_document_record(doc_id: str, filename: str, source_url: str | None = None) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, partial(insert_document_record, doc_id, filename, source_url))
 
 
-async def get_page_count(doc_id: str) -> int:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        async with db.execute(
-            "SELECT COUNT(*) FROM pages WHERE doc_id=?", (doc_id,)
-        ) as cur:
-            row = await cur.fetchone()
-    return row[0] if row else 0
+async def async_insert_job(job_id: str, doc_id: str) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, partial(insert_job, job_id, doc_id))
 
 
-# --------------------------------------------------------------------------- #
-# Table helpers
-# --------------------------------------------------------------------------- #
-async def insert_tables(doc_id: str, tables: list[dict]) -> None:
-    """tables: list of {page_num, html}"""
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        await db.executemany(
-            "INSERT INTO doc_tables (doc_id, page_num, html) VALUES (?,?,?)",
-            [(doc_id, t["page_num"], t["html"]) for t in tables],
-        )
-        await db.commit()
+async def async_get_job(job_id: str) -> dict | None:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(get_job, job_id))
 
 
-async def get_tables(doc_id: str) -> list[dict]:
-    async with aiosqlite.connect(SQLITE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM doc_tables WHERE doc_id=? ORDER BY page_num", (doc_id,)
-        ) as cur:
-            rows = await cur.fetchall()
-    return [dict(r) for r in rows]
+async def async_get_all_documents() -> list[dict]:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, get_all_documents)
 
 
-async def get_metadata(doc_id: str) -> dict | None:
-    import json as _json
-    doc = await get_document(doc_id)
-    if not doc:
-        return None
-    raw = doc.get("metadata", "{}")
+async def async_get_document(doc_id: str) -> dict | None:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(get_document, doc_id))
+
+
+async def async_delete_document(doc_id: str) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, partial(delete_document, doc_id))
+
+
+def init_db() -> None:
+    """
+    Call once at startup to pre-create the MongoClient singleton and indexes.
+    Catches connection errors so FastAPI can still start even if MongoDB isn't
+    reachable yet — actual queries will raise at the point of use.
+    """
     try:
-        return _json.loads(raw)
-    except Exception:
-        return {}
+        get_db()
+        print("[Maxcavator] ✓ MongoDB connected and indexes created.")
+    except Exception as exc:
+        print(f"[Maxcavator] ⚠ MongoDB not reachable at startup: {exc}")
+        print("[Maxcavator]   → Start MongoDB, then the server will auto-reconnect on first request.")
