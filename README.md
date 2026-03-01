@@ -1,7 +1,7 @@
 # Maxcavator 2.0 ◈
 
 **[ Understand ] Smarter** 
-
+Demo Video: `https://youtu.be/AuMj3RBfgVc`
 Maxcavator 2.0 is an intelligent, AI-native PDF Data Extraction and Retrieval-Augmented Generation (RAG) system. It fundamentally changes how you understand and interact with your PDF documents by instantly extracting complex structures (sections, tables, images), generating robust RAG indices, and allowing you to chat seamlessly with your documents.
 
 ![Maxcavator 2.0 Core Features](https://via.placeholder.com/800x400.png?text=Maxcavator+2.0+Hero+Interface)
