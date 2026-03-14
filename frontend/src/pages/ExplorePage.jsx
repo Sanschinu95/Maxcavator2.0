@@ -1,9 +1,33 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getSections, getTables, getImages, getLinks, getFullJson } from '../api'
+import { getSections, getTables, getImages, getLinks, getFullJson,
+         downloadImage, downloadSection, downloadLinksCSV, downloadTableExport, getDocumentFileUrl } from '../api'
+import DownloadButton from '../components/DownloadButton'
 
 const TABS = ['Sections', 'Tables', 'Images', 'Links', 'Raw JSON']
 const BASE = import.meta.env.VITE_API_URL || ''
+
+function isDisplayableSection(sec) {
+    const heading = (sec?.heading || '').trim()
+    const content = (sec?.content || '').trim()
+
+    if (!heading && !content) return false
+
+    // Drop page markers / noise-like section stubs that hurt readability.
+    if (/^(?:s\s*[-–]\s*\d+|page\s*\d+|\d+|\(?\d+\)?)$/i.test(heading) && content.length < 60) {
+        return false
+    }
+
+    // Drop obvious table header fragments with little/no body.
+    if (/^(?:No\.|No\s|[A-Z][a-z]?\s){6,}/.test(heading) && content.length < 120) {
+        return false
+    }
+
+    // Keep table / figure anchors even if body is empty.
+    if (/^(table|figure|fig\.)\s/i.test(heading)) return true
+
+    return true
+}
 
 export default function ExplorePage() {
     const { docId } = useParams()
@@ -18,6 +42,10 @@ export default function ExplorePage() {
     const [error, setError] = useState(null)
     const [activeSec, setActiveSec] = useState(0)
     const sectionRefs = useRef({})
+
+    const displaySections = sections
+        .map((sec, idx) => ({ ...sec, _sourceIndex: idx }))
+        .filter(isDisplayableSection)
 
     // ── Load all data on mount ────────────────────────────────────────────
     useEffect(() => {
@@ -88,14 +116,24 @@ export default function ExplorePage() {
                 <div className="explore-nav-header">
                     <Link to="/library" className="explore-nav-header-back">← Library</Link>
                     <div className="explore-nav-header-title">{docTitle || 'Document'}</div>
+                    {docId && (
+                        <button
+                            className="btn btn-ghost"
+                            onClick={() => window.open(getDocumentFileUrl(docId), '_blank')}
+                            style={{ marginTop: 8, width: '100%' }}
+                            title="Open original PDF in new tab"
+                        >
+                            📄 Open Original PDF
+                        </button>
+                    )}
                 </div>
 
                 <div className="section-tree">
-                    {sections.length === 0 ? (
+                    {displaySections.length === 0 ? (
                         <div className="text-muted text-xs" style={{ padding: '20px 12px' }}>
                             No sections detected.
                         </div>
-                    ) : sections.map((sec, idx) => {
+                    ) : displaySections.map((sec, idx) => {
                         const indent = Math.max(0, (sec.level || 1) - 1)
                         return (
                             <button
@@ -139,15 +177,16 @@ export default function ExplorePage() {
                 <div className="explore-body">
                     {activeTab === 'Sections' && (
                         <SectionsTab
-                            sections={sections}
+                            sections={displaySections}
                             activeSec={activeSec}
                             setActiveSec={setActiveSec}
                             sectionRefs={sectionRefs}
+                            docId={docId}
                         />
                     )}
-                    {activeTab === 'Tables' && <TablesTab tables={tables} />}
-                    {activeTab === 'Images' && <ImagesTab images={images} />}
-                    {activeTab === 'Links' && <LinksTab links={links} />}
+                    {activeTab === 'Tables' && <TablesTab tables={tables} docId={docId} />}
+                    {activeTab === 'Images' && <ImagesTab images={images} docId={docId} />}
+                    {activeTab === 'Links' && <LinksTab links={links} docId={docId} />}
                     {activeTab === 'Raw JSON' && <JsonTab data={jsonData} />}
                 </div>
             </div>
@@ -171,7 +210,18 @@ function TabCount({ n }) {
 }
 
 /* ── Sections Tab ────────────────────────────────────────────────────────── */
-function SectionsTab({ sections, activeSec, setActiveSec, sectionRefs }) {
+function SectionsTab({ sections, activeSec, setActiveSec, sectionRefs, docId }) {
+    const [copiedIdx, setCopiedIdx] = useState(null)
+
+    const copyText = useCallback(async (sec, idx) => {
+        const text = `${sec.heading || ''}\n\n${sec.content || ''}`
+        try {
+            await navigator.clipboard.writeText(text)
+            setCopiedIdx(idx)
+            setTimeout(() => setCopiedIdx(null), 1500)
+        } catch { /* clipboard unavailable */ }
+    }, [])
+
     if (sections.length === 0) {
         return (
             <div className="empty-state">
@@ -193,7 +243,26 @@ function SectionsTab({ sections, activeSec, setActiveSec, sectionRefs }) {
                     style={{ marginBottom: 48 }}
                     id={`section-content-${idx}`}
                 >
-                    <div className="section-heading">{sec.heading || `Section ${idx + 1}`}</div>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                        <div className="section-heading">{sec.heading || `Section ${idx + 1}`}</div>
+                        <div className="section-actions">
+                            <button
+                                className="download-btn"
+                                onClick={() => copyText(sec, idx)}
+                                title="Copy section text"
+                            >
+                                {copiedIdx === idx ? '✓ Copied' : '⎘ Copy Text'}
+                            </button>
+                            <DownloadButton
+                                label="Download .txt"
+                                onClick={() => downloadSection(
+                                    docId,
+                                    sec._sourceIndex ?? idx,
+                                    `${(sec.heading || `Section_${idx + 1}`).slice(0, 40)}.txt`
+                                )}
+                            />
+                        </div>
+                    </div>
                     <div className="section-page-range">
                         Pages {sec.page_start}
                         {sec.page_end !== sec.page_start ? `—${sec.page_end}` : ''} · Level {sec.level || 1}
@@ -207,62 +276,106 @@ function SectionsTab({ sections, activeSec, setActiveSec, sectionRefs }) {
     )
 }
 
-/* ── Tables Tab ──────────────────────────────────────────────────────────── */
-function TablesTab({ tables }) {
+/* ── Tables Tab — Full Visualizer with split panel + export ──────────────── */
+function TablesTab({ tables, docId }) {
+    const [selectedIdx, setSelectedIdx] = useState(0)
+
     if (tables.length === 0) {
         return (
             <div className="empty-state">
                 <div className="empty-state-icon">📊</div>
                 <div className="empty-state-title">No tables found</div>
-                <div className="empty-state-desc">PyMuPDF did not detect any tables in this document.</div>
+                <div className="empty-state-desc">No tables were detected in this document.</div>
             </div>
         )
     }
 
+    const selected = tables[selectedIdx] || tables[0]
+    const rowCount = selected.row_count ?? selected.rows?.length ?? 0
+    const colCount = selected.col_count ?? selected.headers?.length ?? 0
+
     return (
-        <div className="tables-container">
-            {tables.map((tbl, idx) => (
-                <div key={idx} className="table-block" id={`table-block-${idx}`}>
-                    {tbl.caption && (
-                        <div className="table-caption">
-                            {tbl.caption}
-                            <span className="table-caption-pos">({tbl.caption_position})</span>
-                        </div>
-                    )}
-                    <div className="table-scroll">
-                        <table className="data-table">
-                            {tbl.headers && tbl.headers.length > 0 && (
-                                <thead>
-                                    <tr>
-                                        {tbl.headers.map((h, hi) => (
-                                            <th key={hi}>{h || '—'}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
+        <div className="tv-shell">
+            {/* Left panel: table list */}
+            <div className="tv-list">
+                {tables.map((tbl, idx) => {
+                    const rc = tbl.row_count ?? tbl.rows?.length ?? 0
+                    const cc = tbl.col_count ?? tbl.headers?.length ?? 0
+                    return (
+                        <button
+                            key={idx}
+                            className={`tv-list-item${selectedIdx === idx ? ' active' : ''}`}
+                            onClick={() => setSelectedIdx(idx)}
+                        >
+                            <div className="tv-list-item-title">
+                                Table {idx + 1} — Page {tbl.page} — {rc}×{cc}
+                            </div>
+                            {tbl.caption && (
+                                <div className="tv-list-item-caption">{tbl.caption}</div>
                             )}
-                            <tbody>
-                                {(tbl.rows || []).map((row, ri) => (
-                                    <tr key={ri}>
-                                        {row.map((cell, ci) => (
-                                            <td key={ci}>{cell || ''}</td>
-                                        ))}
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                            {tbl.extraction_method && (
+                                <div className="tv-list-item-meta">via {tbl.extraction_method}</div>
+                            )}
+                        </button>
+                    )
+                })}
+            </div>
+
+            {/* Right panel: selected table rendering */}
+            <div className="tv-detail">
+                {/* Header with caption + export buttons */}
+                <div className="tv-export-bar">
+                    <div>
+                        <div className="tv-export-bar-title">
+                            Table {selectedIdx + 1}
+                            <span className="table-viz-detail-dims">{rowCount}×{colCount}</span>
+                        </div>
+                        {selected.caption && (
+                            <div className="tv-caption">{selected.caption}</div>
+                        )}
                     </div>
-                    <div className="table-page-badge">
-                        Page {tbl.page}{tbl.page_end && tbl.page_end !== tbl.page ? `–${tbl.page_end}` : ''}
-                        {tbl.rows?.length > 0 && ` · ${tbl.rows.length} rows`}
+                    <div className="tv-export-actions">
+                        <DownloadButton label="CSV" onClick={() => downloadTableExport(docId, selectedIdx, 'csv')} />
+                        <DownloadButton label="JSON" onClick={() => downloadTableExport(docId, selectedIdx, 'json')} />
+                        <DownloadButton label="XLSX" onClick={() => downloadTableExport(docId, selectedIdx, 'xlsx')} />
                     </div>
                 </div>
-            ))}
+
+                {/* Table rendering */}
+                <div className="tv-table-scroll">
+                    <table className="data-table data-table-viz">
+                        {selected.headers && selected.headers.length > 0 && (
+                            <thead>
+                                <tr>
+                                    {selected.headers.map((h, hi) => (
+                                        <th key={hi}>{h || '—'}</th>
+                                    ))}
+                                </tr>
+                            </thead>
+                        )}
+                        <tbody>
+                            {(selected.rows || []).map((row, ri) => (
+                                <tr key={ri} className={ri % 2 === 1 ? 'alt-row' : ''}>
+                                    {row.map((cell, ci) => (
+                                        <td key={ci}>{cell || ''}</td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div className="table-page-badge">
+                    Page {selected.page}{selected.page_end && selected.page_end !== selected.page ? `–${selected.page_end}` : ''}
+                    {selected.extraction_method && ` · ${selected.extraction_method}`}
+                </div>
+            </div>
         </div>
     )
 }
 
 /* ── Images Tab ──────────────────────────────────────────────────────────── */
-function ImagesTab({ images }) {
+function ImagesTab({ images, docId }) {
     const BASE = import.meta.env.VITE_API_URL || ''
 
     if (images.length === 0) {
@@ -296,6 +409,12 @@ function ImagesTab({ images }) {
                         <span>Page {img.page}</span>
                         <span>{img.width}×{img.height}</span>
                     </div>
+                    <div className="image-card-actions">
+                        <DownloadButton
+                            label="Download Image"
+                            onClick={() => downloadImage(docId, img.image_index, `page${img.page}_img${img.image_index}.png`)}
+                        />
+                    </div>
                 </div>
             ))}
         </div>
@@ -303,7 +422,7 @@ function ImagesTab({ images }) {
 }
 
 /* ── Links Tab ───────────────────────────────────────────────────────────── */
-function LinksTab({ links }) {
+function LinksTab({ links, docId }) {
     if (links.length === 0) {
         return (
             <div className="empty-state">
@@ -316,6 +435,12 @@ function LinksTab({ links }) {
 
     return (
         <div style={{ overflowX: 'auto' }}>
+            <div style={{ marginBottom: 14, display: 'flex', justifyContent: 'flex-end' }}>
+                <DownloadButton
+                    label="Export All Links as CSV"
+                    onClick={() => downloadLinksCSV(docId)}
+                />
+            </div>
             <table className="links-table" id="links-table">
                 <thead>
                     <tr>

@@ -73,29 +73,55 @@ async def _stream(req: ChatRequest):
             None, partial(query_chunks, req.query, req.doc_id, TOP_K_CHUNKS)
         )
 
-        # ── 2. Emit sources event first ────────────────────────────────────
-        sources = [
-            {
-                "text":        c["text"][:400],
-                "doc_id":      c["doc_id"],
-                "page_num":    c["page_num"],
-                "section_idx": c.get("section_idx"),
-                "distance":    c.get("distance", 0.0),
+        # ── 2. Emit sources event first (with bbox for PDF highlighting) ────
+        # Pre-fetch document for section headings
+        doc_data = None
+        if req.doc_id:
+            doc_data = await loop.run_in_executor(
+                None, partial(get_document, req.doc_id)
+            )
+
+        sources = []
+        for c in chunks:
+            section_heading = ""
+            if c.get("section_idx") is not None:
+                d = doc_data
+                if not d and c.get("doc_id"):
+                    d = await loop.run_in_executor(
+                        None, partial(get_document, c["doc_id"])
+                    )
+                if d:
+                    secs = d.get("sections", [])
+                    idx = c.get("section_idx", 0)
+                    if 0 <= idx < len(secs):
+                        section_heading = secs[idx].get("heading", "")
+
+            source_entry = {
+                "text":            c["text"][:400],
+                "doc_id":          c["doc_id"],
+                "page_num":        c["page_num"],
+                "section_idx":     c.get("section_idx"),
+                "distance":        c.get("distance", 0.0),
+                "bbox":            c.get("bbox"),
+                "chunk_preview":   c.get("chunk_preview", ""),
+                "section_heading": section_heading,
             }
-            for c in chunks
-        ]
+            sources.append(source_entry)
+
         yield _sse({"type": "sources", "content": sources})
 
         # ── 3. Build context block ─────────────────────────────────────────
         ctx_parts = []
         for i, c in enumerate(chunks, 1):
             heading = ""
-            if c.get("section_idx") is not None and req.doc_id:
-                doc = await loop.run_in_executor(
-                    None, partial(get_document, c["doc_id"])
-                )
-                if doc:
-                    secs = doc.get("sections", [])
+            if c.get("section_idx") is not None:
+                d = doc_data
+                if not d and c.get("doc_id"):
+                    d = await loop.run_in_executor(
+                        None, partial(get_document, c["doc_id"])
+                    )
+                if d:
+                    secs = d.get("sections", [])
                     idx  = c.get("section_idx", 0)
                     if 0 <= idx < len(secs):
                         heading = secs[idx].get("heading", "")

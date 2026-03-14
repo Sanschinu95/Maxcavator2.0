@@ -13,6 +13,7 @@ export default defineConfig({
       '/images': 'http://localhost:8000',
       '/chat': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
+      '/pdfs': 'http://localhost:8000',
     },
   },
 })

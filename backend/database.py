@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import certifi
 import pymongo
 from pymongo import MongoClient
 from pymongo.collection import Collection
@@ -30,7 +31,7 @@ def get_db():
     global _client, _db
     if _client is None:
         try:
-            _client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5_000)
+            _client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5_000, tlsCAFile=certifi.where())
             _db = _client[MONGODB_DB]
             # Ensure indexes (will raise if unreachable — caught in init_db)
             _db.documents.create_index("document_id", unique=True)

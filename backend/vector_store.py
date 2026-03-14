@@ -70,7 +70,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 def upsert_chunks(doc_id: str, chunks: list[dict]) -> None:
     """
-    chunks: list of {chunk_id, text, page_num, section_idx, chunk_index}
+    chunks: list of {chunk_id, text, page_num, section_idx, chunk_index, bbox?, chunk_preview?}
     """
     if not chunks:
         return
@@ -78,15 +78,22 @@ def upsert_chunks(doc_id: str, chunks: list[dict]) -> None:
     texts      = [c["text"]     for c in chunks]
     ids        = [c["chunk_id"] for c in chunks]
     embeddings = embed_texts(texts)
-    metadatas  = [
-        {
-            "doc_id":     doc_id,
-            "page_num":   c.get("page_num", 0),
-            "section_idx": c.get("section_idx", 0),
-            "chunk_index": c.get("chunk_index", 0),
+    metadatas  = []
+    for c in chunks:
+        meta = {
+            "doc_id":       doc_id,
+            "page_num":     c.get("page_num", 0),
+            "section_idx":  c.get("section_idx", 0),
+            "chunk_index":  c.get("chunk_index", 0),
         }
-        for c in chunks
-    ]
+        # Store bbox as comma-separated string (ChromaDB metadata must be str/int/float)
+        bbox = c.get("bbox")
+        if bbox and isinstance(bbox, list) and len(bbox) == 4:
+            meta["bbox"] = ",".join(str(v) for v in bbox)
+        else:
+            meta["bbox"] = ""
+        meta["chunk_preview"] = c.get("chunk_preview", c["text"][:80])
+        metadatas.append(meta)
     collection.upsert(
         ids=ids,
         embeddings=embeddings,
@@ -180,12 +187,25 @@ def _collect_results(col: chromadb.Collection, res: dict, out: list[dict]) -> No
         except Exception:
             pass
 
+        # Parse bbox from metadata string
+        bbox_str = meta.get("bbox", "")
+        bbox = None
+        if bbox_str:
+            try:
+                bbox = [float(v) for v in bbox_str.split(",")]
+                if len(bbox) != 4:
+                    bbox = None
+            except (ValueError, AttributeError):
+                bbox = None
+
         out.append({
-            "text":        expanded_text,
-            "page_num":    meta.get("page_num", 0),
-            "section_idx": meta.get("section_idx", 0),
-            "distance":    round(dist, 4),
-            "doc_id":      doc_id,
+            "text":          expanded_text,
+            "page_num":      meta.get("page_num", 0),
+            "section_idx":   meta.get("section_idx", 0),
+            "distance":      round(dist, 4),
+            "doc_id":        doc_id,
+            "bbox":          bbox,
+            "chunk_preview": meta.get("chunk_preview", ""),
         })
 
 

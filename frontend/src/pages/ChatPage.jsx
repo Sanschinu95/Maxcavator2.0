@@ -1,7 +1,16 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback, forwardRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { getDocuments } from '../api'
+import { getDocuments, getDocumentFileUrl } from '../api'
 import useChat from '../hooks/useChat'
+import { Document, Page, pdfjs } from 'react-pdf'
+import 'react-pdf/dist/esm/Page/AnnotationLayer.css'
+import 'react-pdf/dist/esm/Page/TextLayer.css'
+
+// Configure pdfjs worker from local bundle for reliable Vite resolution.
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url,
+).toString()
 
 export default function ChatPage() {
     const { docId } = useParams()
@@ -10,8 +19,13 @@ export default function ChatPage() {
     const [inputVal, setInputVal] = useState('')
     const [pdfPage, setPdfPage] = useState(1)
     const [showPdf, setShowPdf] = useState(!!docId)
+    const [numPages, setNumPages] = useState(null)
+    const [pulseChunkIdx, setPulseChunkIdx] = useState(null)
+    const [pdfLoadError, setPdfLoadError] = useState('')
     const bottomRef = useRef(null)
     const textareaRef = useRef(null)
+    const pdfContainerRef = useRef(null)
+    const pageRefs = useRef({})
 
     const { messages, sources, streaming, error, send, clear } = useChat(docId)
 
@@ -31,6 +45,34 @@ export default function ChatPage() {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages])
 
+    // Auto-scroll PDF to first referenced page when sources arrive
+    useEffect(() => {
+        if (sources.length > 0 && sources[0].page_num) {
+            setPdfPage(sources[0].page_num)
+            scrollPdfToPage(sources[0].page_num)
+        }
+    }, [sources])
+
+    const scrollPdfToPage = useCallback((pageNum) => {
+        setTimeout(() => {
+            const el = pageRefs.current[pageNum]
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }
+        }, 100)
+    }, [])
+
+    const handleSourceClick = useCallback((chunk, idx) => {
+        if (chunk.page_num) {
+            setPdfPage(chunk.page_num)
+            setShowPdf(true)
+            scrollPdfToPage(chunk.page_num)
+            // Pulse the highlight
+            setPulseChunkIdx(idx)
+            setTimeout(() => setPulseChunkIdx(null), 800)
+        }
+    }, [scrollPdfToPage])
+
     const handleSend = () => {
         const q = inputVal.trim()
         if (!q || streaming) return
@@ -45,6 +87,17 @@ export default function ChatPage() {
             handleSend()
         }
     }
+
+    const onDocumentLoadSuccess = ({ numPages: n }) => {
+        setNumPages(n)
+        setPdfLoadError('')
+    }
+
+    const onDocumentLoadError = (err) => {
+        setPdfLoadError(err?.message || 'Failed to load PDF')
+    }
+
+    const pdfUrl = docId ? getDocumentFileUrl(docId) : null
 
     return (
         <div className="chat-shell">
@@ -69,6 +122,15 @@ export default function ChatPage() {
                                 title="Clear conversation"
                             >
                                 ✕ Clear
+                            </button>
+                        )}
+                        {docId && (
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => window.open(getDocumentFileUrl(docId), '_blank')}
+                                title="Open original PDF in new tab"
+                            >
+                                📄 Open PDF
                             </button>
                         )}
                         <button
@@ -179,17 +241,15 @@ export default function ChatPage() {
                             key={idx}
                             className="source-chunk hoverable"
                             id={`source-chunk-${idx}`}
-                            onClick={() => {
-                                if (chunk.page_num) {
-                                    setPdfPage(chunk.page_num)
-                                    setShowPdf(true)
-                                }
-                            }}
+                            onClick={() => handleSourceClick(chunk, idx)}
                             style={{ cursor: 'pointer', transition: 'background 0.2s' }}
                         >
                             <div className="source-chunk-meta">
                                 <span>Page {chunk.page_num}</span>
-                                {chunk.section_idx !== undefined && (
+                                {chunk.section_heading && (
+                                    <span>§ {chunk.section_heading}</span>
+                                )}
+                                {!chunk.section_heading && chunk.section_idx !== undefined && (
                                     <span>§ {chunk.section_idx + 1}</span>
                                 )}
                                 <span style={{ opacity: 0.6 }}>
@@ -202,36 +262,142 @@ export default function ChatPage() {
                 </div>
             </aside>
 
-            {/* ── PDF panel ──────────────────────────────────────────── */}
-            {showPdf && docId && (
-                <aside className="pdf-panel" style={{ flex: 1.5, borderLeft: '1px solid var(--border)', background: 'var(--bg-base)', maxWidth: '50%' }}>
-                    <iframe
-                        src={`http://localhost:8000/pdfs/${docId}.pdf#page=${pdfPage}&view=FitH`}
-                        width="100%"
-                        height="100%"
-                        style={{ border: 'none' }}
-                    />
+            {/* ── PDF Viewer panel with react-pdf + highlight overlays ── */}
+            {showPdf && docId && pdfUrl && (
+                <aside className="pdf-viewer-panel" ref={pdfContainerRef}>
+                    <div className="pdf-viewer-header">
+                        <span className="pdf-viewer-title">PDF Viewer</span>
+                        {numPages && (
+                            <span className="pdf-viewer-page-info">
+                                {numPages} pages
+                            </span>
+                        )}
+                    </div>
+                    <div className="pdf-viewer-scroll">
+                        <Document
+                            file={pdfUrl}
+                            onLoadSuccess={onDocumentLoadSuccess}
+                            onLoadError={onDocumentLoadError}
+                            loading={
+                                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                    <span className="spinner" /> Loading PDF…
+                                </div>
+                            }
+                            error={
+                                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-error)' }}>
+                                    Failed to load PDF{pdfLoadError ? `: ${pdfLoadError}` : '.'}
+                                </div>
+                            }
+                        >
+                            {numPages && Array.from({ length: numPages }, (_, i) => i + 1).map(pageNum => (
+                                <PdfPageWithHighlights
+                                    key={pageNum}
+                                    pageNum={pageNum}
+                                    sources={sources}
+                                    pulseChunkIdx={pulseChunkIdx}
+                                    ref={el => { pageRefs.current[pageNum] = el }}
+                                />
+                            ))}
+                        </Document>
+                    </div>
                 </aside>
             )}
         </div>
     )
 }
 
+/* ── PDF Page with canvas highlight overlay ─────────────────────────────── */
+
+const PdfPageWithHighlights = forwardRef(function PdfPageWithHighlights(
+    { pageNum, sources, pulseChunkIdx },
+    ref
+) {
+    const canvasRef = useRef(null)
+    const [pageDims, setPageDims] = useState(null)
+
+    const onRenderSuccess = useCallback((page) => {
+        setPageDims({
+            originalWidth: page.originalWidth,
+            originalHeight: page.originalHeight,
+            width: page.width,
+            height: page.height,
+        })
+    }, [])
+
+    // Draw highlights on canvas whenever sources or pulse changes
+    useEffect(() => {
+        const canvas = canvasRef.current
+        if (!canvas || !pageDims) return
+
+        const ctx = canvas.getContext('2d')
+        canvas.width = pageDims.width
+        canvas.height = pageDims.height
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+        const scaleX = pageDims.width / pageDims.originalWidth
+        const scaleY = pageDims.height / pageDims.originalHeight
+
+        // Find sources for this page that have bbox
+        const pageSourcesWithBbox = (sources || [])
+            .map((s, i) => ({ ...s, _idx: i }))
+            .filter(s => s.page_num === pageNum && s.bbox && Array.isArray(s.bbox) && s.bbox.length === 4)
+
+        for (const source of pageSourcesWithBbox) {
+            const [x0, y0, x1, y1] = source.bbox
+            const sx = x0 * scaleX
+            const sy = y0 * scaleY
+            const sw = (x1 - x0) * scaleX
+            const sh = (y1 - y0) * scaleY
+
+            const isPulsing = pulseChunkIdx === source._idx
+            const fillAlpha = isPulsing ? 0.55 : 0.35
+
+            ctx.fillStyle = `rgba(135, 206, 235, ${fillAlpha})`
+            ctx.fillRect(sx, sy, sw, sh)
+            ctx.strokeStyle = 'rgba(135, 206, 235, 0.8)'
+            ctx.lineWidth = 1.5
+            ctx.strokeRect(sx, sy, sw, sh)
+        }
+    }, [sources, pageDims, pageNum, pulseChunkIdx])
+
+    return (
+        <div
+            ref={ref}
+            className="pdf-page-wrapper"
+            style={{ position: 'relative', marginBottom: 8 }}
+        >
+            <Page
+                pageNumber={pageNum}
+                width={560}
+                onRenderSuccess={onRenderSuccess}
+                renderTextLayer={true}
+                renderAnnotationLayer={true}
+            />
+            <canvas
+                ref={canvasRef}
+                className="pdf-highlight-canvas"
+                style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    pointerEvents: 'none',
+                    width: pageDims?.width || 560,
+                    height: pageDims?.height || 792,
+                }}
+            />
+        </div>
+    )
+})
+
 /* ── Minimal Markdown renderer ─────────────────────────────────────────── */
 function MarkdownContent({ content }) {
-    // Simple inline markdown without heavy library
-    // Handle bold, code, and preserve paragraphs
     const lines = content.split('\n')
     const html = lines.map(line => {
-        // Bold
         line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        // Inline code
         line = line.replace(/`([^`]+)`/g, '<code>$1</code>')
-        // Headers
         if (/^### /.test(line)) return `<h3>${line.slice(4)}</h3>`
         if (/^## /.test(line)) return `<h2>${line.slice(3)}</h2>`
         if (/^# /.test(line)) return `<h1>${line.slice(2)}</h1>`
-        // List items
         if (/^[-*] /.test(line)) return `<li>${line.slice(2)}</li>`
         if (/^\d+\. /.test(line)) return `<li>${line.replace(/^\d+\. /, '')}</li>`
         return line || ''

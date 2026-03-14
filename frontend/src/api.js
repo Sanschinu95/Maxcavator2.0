@@ -81,6 +81,61 @@ export async function getFullJson(docId) {
     return res.json()
 }
 
+// ──────────────────────────── Download helpers ───────────────────────────── //
+
+/**
+ * Generic blob download: fetches a URL, creates an object URL, triggers a
+ * programmatic <a> click to save the file. Returns when the download starts.
+ */
+export async function downloadBlob(url, filename) {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error('Download failed')
+    const blob = await res.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    setTimeout(() => {
+        document.body.removeChild(a)
+        URL.revokeObjectURL(blobUrl)
+    }, 100)
+}
+
+export function downloadImage(docId, imageIndex, filename) {
+    return downloadBlob(
+        `${BASE}/explore/${docId}/images/${imageIndex}/download`,
+        filename || `image_${imageIndex}.png`
+    )
+}
+
+export function downloadSection(docId, sectionIndex, filename) {
+    return downloadBlob(
+        `${BASE}/explore/${docId}/sections/${sectionIndex}/download`,
+        filename || `section_${sectionIndex + 1}.txt`
+    )
+}
+
+export function downloadLinksCSV(docId) {
+    return downloadBlob(
+        `${BASE}/explore/${docId}/links/export`,
+        `links_${docId.slice(0, 8)}.csv`
+    )
+}
+
+export function downloadTableExport(docId, tableIndex, format) {
+    const ext = format === 'xlsx' ? 'xlsx' : format === 'json' ? 'json' : 'csv'
+    return downloadBlob(
+        `${BASE}/explore/${docId}/tables/${tableIndex}/export?format=${format}`,
+        `table_${tableIndex + 1}.${ext}`
+    )
+}
+
+export function getDocumentFileUrl(docId) {
+    return `${BASE}/documents/${docId}/file`
+}
+
 // ──────────────────────────────── Chat SSE ───────────────────────────────── //
 /**
  * chatStream — opens an SSE POST stream manually.

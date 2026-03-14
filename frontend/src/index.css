@@ -1600,6 +1600,286 @@ body {
   gap: 10px;
 }
 
+/* ── Download button component ───────────────────────────────────────────── */
+.download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+
+.download-btn:hover:not(:disabled) {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: var(--amber-subtle);
+}
+
+.download-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Section action buttons ────────────────────────────────────────────── */
+.section-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.section-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+
+.section-copy-btn:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: var(--amber-subtle);
+}
+
+.section-copy-btn.copied {
+  border-color: var(--status-done);
+  color: var(--status-done);
+  background: rgba(52, 211, 153, 0.1);
+}
+
+/* ── Table visualizer split panel ──────────────────────────────────────── */
+.tv-shell {
+  display: flex;
+  gap: 0;
+  height: calc(100vh - 200px);
+  min-height: 400px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.tv-list {
+  width: 280px;
+  min-width: 220px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  background: var(--bg-base);
+  flex-shrink: 0;
+}
+
+.tv-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+  background: transparent;
+  border-left: 3px solid transparent;
+}
+
+.tv-list-item:hover {
+  background: var(--bg-hover);
+}
+
+.tv-list-item.active {
+  background: var(--bg-elevated);
+  border-left-color: var(--amber);
+}
+
+.tv-list-item-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tv-list-item-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.tv-list-item-caption {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.tv-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tv-export-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.tv-export-bar-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tv-export-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.tv-table-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+
+.tv-caption {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-amber);
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: var(--amber-subtle);
+  border-radius: var(--radius);
+  display: inline-block;
+}
+
+.table-viz-detail-dims {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.data-table-viz {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.alt-row td {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+/* Table alternating rows + sticky header */
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-elevated);
+}
+
+.data-table tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+/* ── PDF viewer panel ──────────────────────────────────────────────────── */
+.pdf-viewer-panel {
+  width: 600px;
+  min-width: 400px;
+  max-width: 50%;
+  border-left: 1px solid var(--border);
+  background: var(--bg-base);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.pdf-viewer-header {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.pdf-viewer-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.pdf-viewer-page-info {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.pdf-viewer-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.pdf-page-wrapper {
+  position: relative;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.pdf-highlight-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+/* react-pdf annotation + text layer overrides for dark bg */
+.pdf-page-wrapper .react-pdf__Page__textContent {
+  opacity: 0;
+}
+
+/* ── Highlight pulse animation ─────────────────────────────────────────── */
+@keyframes highlight-pulse {
+  0% { opacity: 0.35; }
+  50% { opacity: 0.7; }
+  100% { opacity: 0.35; }
+}
+
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   :root {
@@ -1616,5 +1896,23 @@ body {
 
   .sources-panel {
     width: 260px;
+  }
+
+  .pdf-viewer-panel {
+    width: 42vw;
+    min-width: 280px;
+    max-width: 42vw;
+  }
+
+  .tv-shell {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .tv-list {
+    width: 100%;
+    max-height: 200px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
   }
 }

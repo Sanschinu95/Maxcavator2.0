@@ -35,7 +35,7 @@ async def _run_both_pipelines(
     """
     await asyncio.gather(
         run_extract_pipeline(job_id, doc_id, pdf_bytes, filename, source_url),
-        run_rag_pipeline(job_id, doc_id),
+        run_rag_pipeline(job_id, doc_id, pdf_bytes),
         return_exceptions=True,
     )
 
